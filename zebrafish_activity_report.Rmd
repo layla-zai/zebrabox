@@ -1,0 +1,655 @@
+---
+title: "Zebrafish Activity Report"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: united
+    code_folding: hide
+date: "Report run `r format(Sys.time(), '%Y-%m-%d')`"
+knit: (function(input, ...) {
+    rmarkdown::render(
+      input,
+      output_file = paste0(
+        stringr::str_remove(xfun::sans_ext(input), 'zebrafish_activity_report'),
+
+        'activity_reports/', Sys.Date(), '_zebrafish_activity_report', '.html'
+      ),
+      envir = globalenv()
+    )
+  })
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(vroom)
+`%$%` <- magrittr::`%$%`
+
+library(plotly)
+
+### used but not loaded
+# library(pracma)
+# library(ggbeeswarm)
+
+knitr::opts_chunk$set(message = F, warning = F)
+```
+
+# Zebrafish Activity Report
+
+```{r}
+# Set your working directory to where the raw data file is saved.  
+# All raw zebrabox data should be in the shared drive in the location listed below, 
+# so this should not need to be changed!
+# setwd("//ressmb01.research.chop.edu/Falk_lab/zebrabox_data_analysis")
+
+# List your file name within the apostrophes in the code below.  Do not delete the .xls portion!
+raw_data <- read.delim("example_data/Example of difference in plate layout/20250107-094117.xls", 
+           fileEncoding = "UTF-16LE", stringsAsFactors = F)
+# Same for the metadata her
+# List your file name within the colons in the code below.  Do not delete the .xls portion!
+metadata <- readxl::read_excel('example_data/Example of difference in plate layout/2025_1_7_ABazidedosecurve_50_75_plate1.xlsx',
+                               skip = 1) %>%
+  mutate(box_used = as.character(box_used),
+         box_used = case_when(box_used == '1' ~ 'LocA',
+                              box_used == '2' ~ 'LocB',
+                              TRUE ~ NA_character_))
+# list control group here, you must match spelling and capitalization exactly
+control_group <- "untreated"
+
+# This code will clean the raw data into a better format for further analysis
+raw_data %>% 
+   mutate(time_min = start / 60, experiment_time_of_day = '',
+          period2 = ifelse(nchar(time_min) == 1, 1,
+                         as.integer(str_extract(time_min, '^[0-9]')) + 1),
+          plate = str_extract(location, 'Loc[AB]'),
+          light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light')) %>%
+  separate(aname, into = c('well', 'name'), sep = '_') %>%
+  left_join(metadata, by = join_by(well, plate == box_used)) %>%
+  select(plate, treatment, well, time_min, light, period, 
+         datatype, activity = actinteg, everything()) %>%
+  filter(!is.na(treatment), timebinid == 1) -> zebrabox_data
+```
+
+## Cleaned Raw Data
+
+```{r, fig.width = 16}
+# This code creates a table of the cleaned data in the final report so you can easily download into excel if needed
+# You can also use this table to quickly spot check your data and review specific fish/wells if needed
+zebrabox_data %>%
+DT::datatable(extensions = 'Buttons',
+               options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))),
+               caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
+                                                   'Zebrabox'))
+
+```
+
+### Plate Map
+
+```{r}
+zebrabox_data %>%
+  separate(well, into = c('well_row', 'well_column'), sep = 1) %>%
+  filter(datatype == 'QuantizationSum', period2 == 3) %>%
+ggplot(aes(x = well_column, y = well_row, text = treatment,
+           color = activity)) +
+  geom_point(size = 4) +
+  scale_color_continuous(limits = c(0, 7000)) +
+  scale_x_discrete(position = "top")  +
+  scale_y_discrete(limits = rev) +
+  facet_wrap(~ plate, ncol = 2) +
+  labs(x = NULL, y = NULL, color = 'Activity\n1st Dark\nPeriod') +
+  theme_minimal() -> plate_map
+
+ggplotly(plate_map)
+```
+
+<br><br>
+
+## QC
+
+### Activity
+
+#### All Fish by Minute
+
+```{r, fig.width = 16}
+### find the maximum activity to scale the graph
+# if LocB is present, use the maximum summarized activity value, otherwise
+# use LocA
+zebrabox_data %>% 
+  filter(startreason == 'Beginning of period', !is.na(activity)) %>%
+  filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
+  filter(activity == max(activity)) %>%
+  select(activity) %>%
+  deframe() -> qc_all_act_max
+
+# zebrabox all fish
+zebrabox_data %>% 
+  filter(startreason == 'Beginning of period') %>%
+ggplot(aes(x = time_min, y = activity, color = well, group = well)) +
+  # add colored blocks to background based on light/dark cycle
+  # colored based on the "light" column
+  # xmin is the current time, xmax is the current time + 1 which makes boxes of
+  # width 1 minute
+  # ymax is 0 to the limits I set on the plot 10,000
+  # you will see in the documentation that you can use -Inf/Inf with geom_rect
+  # to fill up the entire plot area but this is not currently supported with
+  # plotly https://github.com/plotly/plotly.R/issues/1559
+  geom_rect(aes(fill = light, xmin = time_min,
+                 xmax = time_min + 1, ymin = 0, ymax = qc_all_act_max + 100), 
+            color = NA) +
+  scale_fill_manual(values = c('gray80', 'white')) +
+  geom_vline(xintercept = seq(0, max(zebrabox_data$time_min), 10), linetype = 'dashed', color = 'gray60') +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0, max(zebrabox_data$time_min), 10)) +
+  facet_wrap(~ plate, ncol = 1) + 
+  coord_cartesian(ylim = c(0, qc_all_act_max)) +
+  labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Individual Fish') +
+  theme_classic(base_size = 16) -> zebrabox_individual
+ggplotly(zebrabox_individual)
+```
+
+<br>
+
+#### Summarized by Condition
+
+```{r, fig.width = 16}
+### calculate average activity by treatment
+zebrabox_data %>%
+  filter(startreason == 'Beginning of period') %>% 
+  group_by(plate, treatment, light, time_min) %>%
+  summarize(mean_activity = mean(activity, na.rm = T)) %>%
+  ungroup() -> qc_condition_summary
+
+### find the maximum activity to scale the graph
+# if LocB is present, use the maximum summarized activity value, otherwise
+# use LocA
+qc_condition_summary %>%
+  filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
+  filter(mean_activity == max(mean_activity)) %>%
+  select(mean_activity) %>%
+  deframe() -> qc_condition_max
+  
+### plot an interactive graph of summarized activity by treatment
+qc_condition_summary %>%
+ggplot(aes(x = time_min, y = mean_activity, color = treatment, group = treatment)) +
+  geom_rect(aes(fill = light, xmin = time_min,
+                 xmax = time_min + 1, ymin = 0, ymax = qc_condition_max + 100), color = NA) +
+  scale_fill_manual(values = c('gray80', 'white')) +
+  geom_vline(xintercept = seq(0, max(zebrabox_data$time_min), 10), linetype = 'dashed', color = 'gray60') +
+  geom_point() +
+  geom_line() +
+  facet_wrap(~ plate) +
+  coord_cartesian(ylim = c(0, qc_condition_max)) +
+  labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Summarized Conditions') +
+  theme_classic(base_size = 16) -> zebrabox_summarized
+ggplotly(zebrabox_summarized)
+```
+
+<br><br>
+
+
+
+### Filtered Fish
+
+Right now only removing fish if they are "dead" based on very low activity across the entire experiment, but this may change in the future. Fish are displayed in this table if their mean activity in the dark cycles is less than 10 across all periods but are not removed from downstream analysis.
+
+```{r}
+# leaving previous filtering code for now as reference if we want to censor based on other behavior
+# zebrabox_flagged %>%
+#   filter(startreason == 'Beginning of period') %>%
+#   group_by(condition, well) %>%
+#   summarize(low_activity = sum(low_activity), 
+#             high_activity = sum(high_activity),
+#             light_no_freeze = sum(light_no_freeze),
+#             dark_no_swim = sum(dark_no_swim)) %>%
+#   ungroup() %>%
+#   filter(low_activity > 3 | high_activity > 3 | light_no_freeze > 3 | 
+#            dark_no_swim > 3) %>%
+# DT::datatable(extensions = 'Buttons',
+#               options = list(dom = 'Blfrtip',
+#                              buttons = c('copy', 'csv', 'excel'),
+#                              lengthMenu = list(c(10, 25, 50, -1),
+#                                                c(10, 25, 50, "All"))),
+#               caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
+#                                                   'Zebrabox'))
+
+# removing fish if mean activity across all dark periods is less than 10
+zebrabox_data %>% #distinct(startreason)
+  filter(datatype == 'QuantizationSum', !is.na(activity), light == 'dark') %>%
+  group_by(plate, treatment, well) %>%
+  summarize(mean_activity = mean(activity)) %>%
+  ungroup() -> mean_activity
+
+# mean_activity %>%
+# ggplot(aes(x = mean_activity)) +
+#   geom_histogram(bins = 20, fill = 'white', color = 'black') +
+#   labs(x = 'Mean Activity in Dark Cycles', y = 'Number of Wells') +
+#   theme_bw()
+
+mean_activity %>%
+  filter(mean_activity < 10) %>%
+DT::datatable(extensions = 'Buttons',
+               options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))),
+               caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
+                                                   'Zebrabox'))
+```
+
+<br><br>
+
+## Results
+
+### Activity
+
+#### Mean Activity
+
+##### Unnormalized
+
+```{r}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  group_by(treatment, light, well) %>%
+  summarize(mean_activity = mean(activity)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = treatment, y = mean_activity)) +
+  ggbeeswarm::geom_quasirandom() +
+  geom_boxplot(alpha = 0) +
+  labs(x = 'Condition', 
+       y = 'Mean Activity Dark Cycles',
+       title = 'Unnormalized Activity') +
+  theme_bw()
+```
+
+##### Percent Difference
+
+```{r}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity),
+         treatment == control_group, light == 'dark') %>%
+  summarize(median(activity)) %>%
+  deframe() -> median_activity
+  
+
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  mutate(percent_change = ((activity - median_activity) / median_activity) * 100) %>%
+  group_by(treatment, light, well) %>%
+  summarize(mean_activity = mean(percent_change)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = treatment, y = mean_activity)) +
+  ggbeeswarm::geom_quasirandom() +
+  geom_boxplot(alpha = 0) +
+  labs(x = 'Condition', 
+       y = 'Average Percent Change From Control Median\nin Dark Cycles',
+       title = 'Percent Change Activity') +
+  theme_bw()
+
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  mutate(percent_change = ((activity - median_activity) / median_activity) * 100) %>%
+  group_by(treatment, light, well) %>%
+  summarize(mean_activity = mean(percent_change)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+  rename(mean_percent_change = mean_activity) %>%
+DT::datatable(extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))))
+```
+
+#### Area Under the Curve
+
+```{r}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  group_by(plate, treatment, light, period2, well) %>%
+  mutate(index = row_number()) %>% #ungroup() %>% filter(well == 'A01', plate == 'LocA') %>% select(plate, condition, light, time_min, period2, pn, well, index, activity)
+  nest() %>% 
+  ungroup() %>%
+  mutate(auc = map(data, ~ try(as_tibble(pracma::cumtrapz(x = .$time_min, y = .$activity)))),
+         class = map(auc, ~ class(.))) %>% 
+  unnest(c(class)) %>%
+  filter(class != 'try-error') %>%
+  select(-class) %>%
+  unnest(c(auc)) -> zebrabox_auc_all_fish
+
+zebrabox_auc_all_fish %>%
+  group_by(treatment, light, well) %>%
+  summarize(mean_auc = mean(V1)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = treatment, y = mean_auc)) +
+  ggbeeswarm::geom_quasirandom() +
+  geom_boxplot(alpha = 0) +
+  labs(x = 'Condition', 
+       y = 'Mean Area Under the Curve\nAcross All Dark Cycles',
+       title = 'Zebrabox') +
+  theme_bw()
+```
+
+##### Percent Difference
+
+```{r}
+zebrabox_auc_all_fish %>%
+  filter(treatment == control_group, light == 'dark') %>%
+  summarize(median(V1)) %>%
+  deframe() -> median_auc
+  
+
+zebrabox_auc_all_fish %>%
+  mutate(percent_change = ((V1 - median_auc) / median_auc) * 100) %>%
+  group_by(treatment, light, well) %>%
+  summarize(mean_activity = mean(percent_change)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = treatment, y = mean_activity)) +
+  ggbeeswarm::geom_quasirandom() +
+  geom_boxplot(alpha = 0) +
+  labs(x = 'Condition', 
+       y = 'Average Percent Change From Control Median AUC\nin Dark Cycles',
+       title = 'Percent Change AUC') +
+  theme_bw()
+```
+
+#### Stats
+
+```{r}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  group_by(treatment, light, well) %>%
+  summarize(mean_activity = mean(activity)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+  aov(mean_activity ~ treatment, data = .) %>%
+  TukeyHSD(.) %>%
+  broom::tidy(.) %>%
+  select(groups_tested= contrast,
+         difference_means = estimate,
+         conf.low, conf.high, adj.p.value) %>%
+  mutate(difference_means = round(difference_means),
+         conf.low = round(conf.low),
+         conf.high = round(conf.high),
+         adj.p.value = round(adj.p.value, 4)) %>%
+  mutate(significant = ifelse(adj.p.value < 0.05, 'significant', 'not significant')) %>%
+  DT::datatable(extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))))
+```
+
+<br>
+
+### Activity by Period 
+
+#### Unnormalized Activity
+
+###### Static
+
+```{r, fig.width = 12, fig.height = 4}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  mutate(period3 = ifelse(period2 %in% 1:2, 
+                          'acclimation', as.character(period2)),
+         period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                              '6', '7', '8', '9', '10'))) %>%
+  group_by(period3, treatment, light, well) %>%
+  summarize(mean_activity = mean(activity)) %>%
+  ungroup() %>%
+ggplot(aes(x = period3, y = mean_activity, color = treatment)) +
+  annotate("rect", xmin = 1.5, xmax = 2.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+  annotate("rect", xmin = 3.5, xmax = 4.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+  annotate("rect", xmin = 5.5, xmax = 6.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+  annotate("rect", xmin = 7.5, xmax = 8.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+  geom_vline(xintercept = seq(1.5, 8.5, 1), linetype = 'dashed', color = 'gray60') +
+  geom_boxplot(alpha = 0) +
+  # ggbeeswarm::geom_quasirandom(position = position_dodge(width = .75)) +
+   geom_point(position = position_dodge(width = .75)) +
+  labs(x = 'Cycle', 
+       y = 'Mean by Dark Cycle',
+       title = 'Unnormalized Activity') +
+  theme_bw() -> act_by_period
+
+act_by_period
+```
+
+###### Interactive
+
+```{r, fig.width = 12, fig.height = 4}
+ggplotly(act_by_period)
+```
+
+#### Percent Change
+
+```{r, fig.width = 12, fig.height = 4}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity),
+         treatment == control_group) %>%
+  mutate(period3 = ifelse(period2 %in% 1:2, 
+                          'acclimation', as.character(period2)),
+         period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                              '6', '7', '8', '9', '10'))) %>% 
+  group_by(period3) %>%
+  summarize(unique_name = median(activity)) %>%
+  ungroup() -> median_cycle_activity
+
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  mutate(period3 = ifelse(period2 %in% 1:2, 
+                          'acclimation', as.character(period2)),
+         period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                              '6', '7', '8', '9', '10'))) %>%
+  left_join(median_cycle_activity, by = join_by(period3)) %>%
+  mutate(percent_change = ((activity - unique_name) / unique_name) * 100) %>%
+  group_by(period3, treatment, light, well) %>%
+  summarize(mean_activity = mean(percent_change)) %>%
+  ungroup() %>%
+ggplot(aes(x = period3, y = mean_activity, color = treatment)) +
+  annotate("rect", xmin = 1.5, xmax = 2.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+  annotate("rect", xmin = 3.5, xmax = 4.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+  annotate("rect", xmin = 5.5, xmax = 6.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+  annotate("rect", xmin = 7.5, xmax = 8.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+  geom_vline(xintercept = seq(1.5, 8.5, 1), linetype = 'dashed', color = 'gray60') +
+  geom_hline(yintercept = 0, linetype = 'dashed', color = 'gray60') +
+  geom_boxplot(alpha = 0) +
+  geom_point(position = position_dodge(width = .75)) +
+  coord_cartesian(ylim = c(-200, 200)) +
+  labs(x = 'Cycle', 
+       y = 'Percent Change From Control Median Activity',
+       title = 'Percent Change') +
+  theme_bw()
+
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  mutate(period3 = ifelse(period2 %in% 1:2, 
+                          'acclimation', as.character(period2)),
+         period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                              '6', '7', '8', '9', '10'))) %>%
+  left_join(median_cycle_activity, by = join_by(period3)) %>%
+  mutate(percent_change = ((activity - unique_name) / unique_name) * 100) %>%
+  group_by(period3, treatment, light, well) %>%
+  summarize(mean_activity = mean(percent_change)) %>%
+  ungroup() %>%
+  rename(period = period3, percent_change = mean_activity) %>%
+DT::datatable(extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))))
+```
+
+
+
+#### Stats
+
+```{r}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  mutate(period3 = ifelse(period2 %in% 1:2, 
+                          'acclimation', as.character(period2)),
+         period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                              '6', '7', '8', '9'))) %>%
+  group_by(period3, treatment, light, well) %>%
+  summarize(mean_activity = mean(activity)) %>%
+  ungroup() %>%
+  filter(light == 'dark') %>%
+  group_by(period3) %>%
+  nest() %>%
+  ungroup() %>%
+  mutate(test = map(data, ~ TukeyHSD(aov(mean_activity ~ treatment, data = .))),
+         class = map(test, ~ class(.))) %>%
+  unnest(c(class)) %>%
+  filter(class != 'try-error') %>%
+  mutate(test = map(test, ~ broom::tidy(.))) %>%
+  unnest(c(test)) %>%
+  select(period = period3, 
+         groups_tested = contrast,
+         difference_means = estimate,
+         conf.low, conf.high, adj.p.value) %>%
+  mutate(difference_means = round(difference_means),
+         conf.low = round(conf.low),
+         conf.high = round(conf.high),
+         adj.p.value = round(adj.p.value, 4)) %>%
+  mutate(significant = ifelse(adj.p.value < 0.05, 'significant', 'not significant')) %>%
+  DT::datatable(extensions = 'Buttons',
+                options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))))
+```
+
+<br>
+
+### Peak Height
+
+```{r}
+zebrabox_data %>%
+  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+  group_by(treatment, light, period2, well) %>%
+  mutate(index = row_number()) %>%
+  nest() %>%
+  ungroup() %>%
+  mutate(period_peak = map(data, ~ as_tibble(pracma::findpeaks(.$activity, npeaks = 1)))) %>%
+  unnest(c(period_peak)) %>%
+  rename(peak_height = V1, peak_index = V2, curve_start_index = V3,
+         curve_end_index = V4) %>%
+  unnest(c(data)) %>%
+  mutate(max_peak = ifelse(index == peak_index, 'max', NA_character_)) -> zebrabox_data_w_peaks
+
+# test with linear model
+zebrabox_data_w_peaks %>%
+  filter(max_peak == 'max') %>%
+  distinct(treatment, period2, light, well, peak_height) %>%
+  filter(light == 'dark') %>%
+  group_by(treatment) %>%
+  nest() %>%
+  ungroup() %>%
+  mutate(test = map(data, ~ broom::tidy(lm(peak_height ~ period2, data = .)))) %>%
+  unnest(c(test)) %>%
+  filter(term != '(Intercept)') %>%
+  select(treatment, peak_height_change_over_time = estimate,
+         pvalue = p.value) %>%
+  mutate(peak_height_change_over_time = round(peak_height_change_over_time, 2),
+         pvalue = round(peak_height_change_over_time, 2)) %>%
+DT::datatable(extensions = 'Buttons',
+              options = list(dom = 'Blfrtip',
+                             buttons = c('copy', 'csv', 'excel'),
+                             lengthMenu = list(c(10, 25, 50, -1),
+                                               c(10, 25, 50, "All"))),
+              caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
+                                                  'Zebrabox'))
+
+
+zebrabox_data_w_peaks %>%
+  filter(max_peak == 'max') %>%
+  distinct(treatment, period2, light, well, peak_height) %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = period2, y = peak_height, color = treatment, group = well)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = c(3, 5, 7, 9)) +
+  labs(x = 'Condition',
+       y = 'Max Curve Height Dark Cycles',
+       title = 'Zebrabox') +
+  facet_wrap(~ treatment) +
+  theme_bw()
+```
+
+<br>
+
+### Starting Slope
+
+```{r}
+# zebrabox
+zebrabox_data_w_peaks %>% #distinct(period) %>% mutate(period2 = str_remove(period, '^0+:')
+  group_by(treatment, well, light, period2) %>%
+  filter(index <= peak_index) %>% #filter(well == 'c1-004') %>% tail(1) %>% nest() %>% ungroup() %>% mutate(test = map(data, ~ .$activity)) %>% unnest(c(test))
+  nest() %>%
+  ungroup() %>%
+  mutate(len = map(data, ~nrow(.))) %>%
+  unnest(c(len)) %>%
+  mutate(period_start_slope = case_when(len == 1 ~ map(data, ~ .$activity), # maybe return 0 or NA?
+                                        len == 2 ~ map(data, ~ as.numeric(dist(select(.,
+                                                                                      activity, time_min),
+                                                                               method = 'euclidean'))),
+                                        TRUE ~ map(data, ~ filter(broom::tidy(lm(activity ~ time_min, data = .)),
+                                                                  term == 'time_min')$estimate))) %>%
+  unnest(c(period_start_slope)) %>%
+  distinct(treatment, period2, light, well, period_start_slope) %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = period2, y = period_start_slope, color = treatment, group = well)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = c(3, 5, 7, 9)) +
+  labs(x = 'Condition',
+       y = 'Starting Slope Dark Cycles',
+       title = 'Zebrabox') +
+  facet_wrap(~ treatment) +
+  theme_bw()
+```
+
+<br>
+
+### Ending Slope
+
+```{r}
+### just used a linear model
+# zebrabox
+zebrabox_data_w_peaks %>%
+  group_by(treatment, well, light, period2) %>%
+  filter(index >= peak_index) %>% #filter(well == 'c1-004') %>% tail(1) %>% nest() %>% ungroup() %>% mutate(test = map(data, ~ .$activity)) %>% unnest(c(test))
+  nest() %>%
+  ungroup() %>%
+  mutate(len = map(data, ~nrow(.))) %>%
+  unnest(c(len)) %>%
+  mutate(period_start_slope = case_when(len == 1 ~ map(data, ~ .$activity),
+                                        len == 2 ~ map(data, ~ as.numeric(dist(select(.,
+                                                                                      activity, time_min),
+                                                                               method = 'euclidean'))),
+                                        TRUE ~ map(data, ~ filter(broom::tidy(lm(activity ~ time_min, data = .)),
+                                                                  term == 'time_min')$estimate))) %>%
+  unnest(c(period_start_slope)) %>%
+  distinct(treatment, period2, light, well, period_start_slope) %>%
+  filter(light == 'dark') %>%
+ggplot(aes(x = period2, y = period_start_slope, color = treatment, group = well)) +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = c(3, 5, 7, 9)) +
+  labs(x = 'Condition',
+       y = 'Ending Slope Dark Cycles',
+       title = 'Zebrabox') +
+  facet_wrap(~ treatment) +
+  theme_bw()
+```
+
+
+
