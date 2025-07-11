@@ -26,4 +26,19 @@ ui <- page_sidebar(
     
     # Run button
     actionButton("run", "Run")
-  )
+  ),
+  theme = bs_theme(
+    bg = "white",
+    fg = "black",
+    primary = "#E69F00",
+    secondary = "#0072B2",
+    success = "#009E73",
+    base_font = font_google("Inter")
+)
+)
+  
+  server <- function(input, output, session) {
+    
+  }
+    
+    shinyApp(ui = ui, server = server)
