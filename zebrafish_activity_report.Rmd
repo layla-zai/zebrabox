@@ -43,18 +43,19 @@ knitr::opts_chunk$set(message = F, warning = F)
 # setwd("//ressmb01.research.chop.edu/Falk_lab/zebrabox_data_analysis")
 
 # List your file name within the apostrophes in the code below.  Do not delete the .xls portion!
-raw_data <- read.delim("example_data/Example of difference in plate layout/20250107-094117.xls", 
-           fileEncoding = "UTF-16LE", stringsAsFactors = F)
+# raw_data <- read.delim("example_data/Example of difference in plate layout/20250107-094117.xls", 
+#            fileEncoding = "UTF-16LE", stringsAsFactors = F)
+raw_data <- read_tsv('simulated_zebrabox_data2.tsv')
 # Same for the metadata her
 # List your file name within the colons in the code below.  Do not delete the .xls portion!
-metadata <- readxl::read_excel('example_data/Example of difference in plate layout/2025_1_7_ABazidedosecurve_50_75_plate1.xlsx',
+metadata <- readxl::read_excel('2025-07-10_simulated_metadata.xlsx',
                                skip = 1) %>%
   mutate(box_used = as.character(box_used),
          box_used = case_when(box_used == '1' ~ 'LocA',
                               box_used == '2' ~ 'LocB',
                               TRUE ~ NA_character_))
 # list control group here, you must match spelling and capitalization exactly
-control_group <- "untreated"
+control_group <- "WT"
 
 # This code will clean the raw data into a better format for further analysis
 raw_data %>% 
@@ -271,7 +272,7 @@ ggplot(aes(x = treatment, y = mean_activity)) +
 ```{r}
 zebrabox_data %>%
   filter(datatype == 'QuantizationSum', !is.na(activity),
-         treatment == control_group, light == 'dark') %>%
+         strain == control_group, light == 'dark') %>%
   summarize(median(activity)) %>%
   deframe() -> median_activity
   
@@ -300,87 +301,6 @@ zebrabox_data %>%
   filter(light == 'dark') %>%
   rename(mean_percent_change = mean_activity) %>%
 DT::datatable(extensions = 'Buttons',
-                options = list(dom = 'Blfrtip',
-                              buttons = c('copy', 'csv', 'excel'),
-                              lengthMenu = list(c(10, 25, 50, -1),
-                                                c(10, 25, 50, "All"))))
-```
-
-#### Area Under the Curve
-
-```{r}
-zebrabox_data %>%
-  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
-  group_by(plate, treatment, light, period2, well) %>%
-  mutate(index = row_number()) %>% #ungroup() %>% filter(well == 'A01', plate == 'LocA') %>% select(plate, condition, light, time_min, period2, pn, well, index, activity)
-  nest() %>% 
-  ungroup() %>%
-  mutate(auc = map(data, ~ try(as_tibble(pracma::cumtrapz(x = .$time_min, y = .$activity)))),
-         class = map(auc, ~ class(.))) %>% 
-  unnest(c(class)) %>%
-  filter(class != 'try-error') %>%
-  select(-class) %>%
-  unnest(c(auc)) -> zebrabox_auc_all_fish
-
-zebrabox_auc_all_fish %>%
-  group_by(treatment, light, well) %>%
-  summarize(mean_auc = mean(V1)) %>%
-  ungroup() %>%
-  filter(light == 'dark') %>%
-ggplot(aes(x = treatment, y = mean_auc)) +
-  ggbeeswarm::geom_quasirandom() +
-  geom_boxplot(alpha = 0) +
-  labs(x = 'Condition', 
-       y = 'Mean Area Under the Curve\nAcross All Dark Cycles',
-       title = 'Zebrabox') +
-  theme_bw()
-```
-
-##### Percent Difference
-
-```{r}
-zebrabox_auc_all_fish %>%
-  filter(treatment == control_group, light == 'dark') %>%
-  summarize(median(V1)) %>%
-  deframe() -> median_auc
-  
-
-zebrabox_auc_all_fish %>%
-  mutate(percent_change = ((V1 - median_auc) / median_auc) * 100) %>%
-  group_by(treatment, light, well) %>%
-  summarize(mean_activity = mean(percent_change)) %>%
-  ungroup() %>%
-  filter(light == 'dark') %>%
-ggplot(aes(x = treatment, y = mean_activity)) +
-  ggbeeswarm::geom_quasirandom() +
-  geom_boxplot(alpha = 0) +
-  labs(x = 'Condition', 
-       y = 'Average Percent Change From Control Median AUC\nin Dark Cycles',
-       title = 'Percent Change AUC') +
-  theme_bw()
-```
-
-#### Stats
-
-```{r}
-zebrabox_data %>%
-  filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
-  group_by(treatment, light, well) %>%
-  summarize(mean_activity = mean(activity)) %>%
-  ungroup() %>%
-  filter(light == 'dark') %>%
-  aov(mean_activity ~ treatment, data = .) %>%
-  TukeyHSD(.) %>%
-  broom::tidy(.) %>%
-  select(groups_tested= contrast,
-         difference_means = estimate,
-         conf.low, conf.high, adj.p.value) %>%
-  mutate(difference_means = round(difference_means),
-         conf.low = round(conf.low),
-         conf.high = round(conf.high),
-         adj.p.value = round(adj.p.value, 4)) %>%
-  mutate(significant = ifelse(adj.p.value < 0.05, 'significant', 'not significant')) %>%
-  DT::datatable(extensions = 'Buttons',
                 options = list(dom = 'Blfrtip',
                               buttons = c('copy', 'csv', 'excel'),
                               lengthMenu = list(c(10, 25, 50, -1),
