@@ -59,7 +59,8 @@ control_group <- "WT"
 
 # This code will clean the raw data into a better format for further analysis
 raw_data %>% 
-   mutate(time_min = start / 60, experiment_time_of_day = '',
+   mutate(time_min = start / 60, 
+          # experiment_time_of_day = '',
           period2 = ifelse(nchar(time_min) == 1, 1,
                          as.integer(str_extract(time_min, '^[0-9]')) + 1),
           plate = str_extract(location, 'Loc[AB]'),
