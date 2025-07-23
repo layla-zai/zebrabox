@@ -56,7 +56,6 @@ ui <- page_sidebar(
             nav_panel("Activity by Period", plotOutput("plot6")),
             nav_panel("Percent Change by Period", plotOutput("plot7")),
             nav_panel("Statistical Summary", DT::dataTableOutput("stats_table")),
-            nav_panel("Plate Map", plotlyOutput("plate_map")),
             nav_panel("Cleaned Data", DT::dataTableOutput("cleaned_table"))
           )
         )
@@ -77,28 +76,41 @@ ui <- page_sidebar(
 
 server <- function(input, output, session) {
   
-  metadata <- reactive({
+  metadata <- renderTable({
     req(input$metadata_file)
-    readxl::read_excel(input$metadata_file$datapath)
+    df <- readxl::read_excel(input$metadata_file$datapath)
+    df
   })
   
-  zebrabox_data <- reactive({
-    req(input$data_file)
-    raw_data <- read.delim(input$data_file$datapath, sep = "\t", header = TRUE)
+ reactive({read.delim(input$data_file$datapath, sep = "\t", header = TRUE) %>%
+       mutate(
+         time_min = start / 60,
+         period2 = ifelse(time_min < 10, 1, floor(time_min / 10) + 1),
+         plate = str_extract(location, 'Loc[AB]'),
+         light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light'),
+         well = str_extract(location, "[A-H][0-9]{2}")
+       )}) -> zebrabox_data
+ 
+  # zebrabox_data <- renderTable({
+  #   req(input$data_file, input$metadata_file)
+  #   
+  #   raw_data <- read.delim(input$data_file$datapath, sep = "\t", header = TRUE)
+  #   
+  #   data <- raw_data %>%
+  #     mutate(
+  #       time_min = start / 60,
+  #       period2 = ifelse(time_min < 10, 1, floor(time_min / 10) + 1),
+  #       plate = str_extract(location, 'Loc[AB]'),
+  #       light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light'),
+  #       well = str_extract(location, "[A-H][0-9]{2}")
+  #     )
+  #   
+  #   print("Data after mutate:")
+  #   print(head(data))
+  #   
+  #   return(data)
+  # })
     
-    raw_data %>% 
-      mutate(time_min = start / 60, 
-             # experiment_time_of_day = '',
-             period2 = ifelse(nchar(time_min) == 1, 1,
-                              as.integer(str_extract(time_min, '^[0-9]')) + 1),
-             plate = str_extract(location, 'Loc[AB]'),
-             light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light')) %>%
-      separate(aname, into = c('well', 'name'), sep = '_') %>%
-      left_join(metadata(), by = join_by(well, plate == box_used)) %>%
-      select(plate, treatment, well, time_min, light, period, 
-             datatype, activity = actinteg, everything()) %>%
-      filter(!is.na(treatment), timebinid == 1) 
-  })
   
   output$cleaned_table <- DT::renderDataTable({
     req(zebrabox_data())
@@ -117,58 +129,30 @@ server <- function(input, output, session) {
     filename = function() { 
       "0000-00-00_zebrabox_experiment_template.xlsx"
     },
-    content = function(file) {file.copy("C:/Users/layla/OneDrive/Documents/GitHub/zebrabox/0000-00-00_zebrabox_experiment_template.xlsx", file)
-    }
-  )
-  
-  output$plate_map <- plotly::renderPlotly({
-    req(zebrabox_data())
-    
-    plate_map <- zebrabox_data() %>%
-      separate(well, into = c('well_row', 'well_column'), sep = 1) %>%
-      filter(datatype == 'QuantizationSum', period2 == 3) %>%
-      ggplot(aes(x = well_column, y = well_row, text = treatment,
-                 color = activity)) +
-      geom_point(size = 4) +
-      scale_color_continuous(limits = c(0, 7000)) +
-      scale_x_discrete(position = "top")  +
-      scale_y_discrete(limits = rev) +
-      facet_wrap(~ plate, ncol = 2) +
-      labs(x = NULL, y = NULL, color = 'Activity\n1st Dark\nPeriod') +
-      theme_minimal()
-    
-    plotly::ggplotly(plate_map)
-  })
-  
-  output$download_report <- downloadHandler(
-    filename = function() "zebrabox_report.txt",
     content = function(file) {
-      writeLines("This is your ZebraBox analysis report.", file)
+      file.copy("0000-00-00_zebrabox_experiment_template.xlsx", file)
     }
   )
   
-  output$download_data <- downloadHandler(
-    filename = function() "processed_data.tsv",
-    content = function(file) {
-      write.table(data.frame(), file, sep = "\t", row.names = FALSE, quote = FALSE)
-    }
-  )
+  # output$plot1 <- renderPlot({
+# data <- zebrabox_data()%>%
+#     as.data.frame()
+#   req(data)
+#   
+#   ggplot(data, aes(x = time_min, y = actinteg)) +
+#     geom_point() +
+#     labs(title = "Activity vs Time")
+# })
   
   output$plot1 <- renderPlot({
-    data <- zebrabox_data()
-    data %>%
-      filter(datatype == 'QuantizationSum') %>%
-      ggplot(aes(x = plate, y = activity)) +
-      geom_boxplot(alpha = 0.5, fill = "orange") +
-      geom_jitter(width = 0.2, alpha = 0.6) +
-      labs(
-        title = "Activity by Plate (LocA/LocB)",
-        x = "Plate Location",
-        y = "Activity (QuantizationSum)"
-      ) +
-      theme_classic(base_size = 14)
+    zebrabox_data() %>%
+    ggplot(aes(x = time_min, y = actinteg)) +
+      geom_point() +
+      labs(title = "Activity vs Time")
   })
   
+  
+  # The rest of the plots can be placeholders for now
   output$plot2 <- renderPlot({ plot.new() })
   output$plot3 <- renderPlot({ plot.new() })
   output$plot4 <- renderPlot({ plot.new() })
@@ -181,5 +165,4 @@ server <- function(input, output, session) {
   })
   
 }
-
 shinyApp(ui, server)
