@@ -16,9 +16,6 @@ library(DT)
 library(plotly)
 library(tidyr)
 library(tibble)
-# library(rsconnect)
-# options(RCurlOptions = list(ssl.verifypeer = FALSE))
-# options(rsconnect.check.certificate = FALSE)
 options(shiny.maxRequestSize = 30*1024^2)
 
 
