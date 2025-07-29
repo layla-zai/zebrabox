@@ -16,8 +16,8 @@ library(DT)
 library(plotly)
 library(tidyr)
 library(tibble)
+library(ggbeeswarm)
 options(shiny.maxRequestSize = 30*1024^2)
-
 
 ui <- page_sidebar(
   title = "ZebraBox Activity Analysis",
@@ -162,7 +162,9 @@ server <- function(input, output, session) {
   
 }
 
+
 shinyApp(ui, server)
+
 
 
 
