@@ -52,10 +52,11 @@ ui <- page_sidebar(
             nav_panel("Condition Summary", plotlyOutput("condition_summary")),
             nav_panel("Plate Map / Well Activity", plotlyOutput("plate_map")),
             nav_panel("Mean Activity", plotOutput("mean_activity")),
-            nav_panel("Percent Change", plotOutput("percent_change")),
-            nav_panel("Activity by Period", plotOutput("activity_by_period")),
-            nav_panel("Percent Change by Period", plotOutput("percent_change_by_period")),
-            nav_panel("Statistical Summary", DT::dataTableOutput("stats_table")),
+            nav_panel("Percent Change Plot", plotlyOutput("percent_change_plot")),
+            nav_panel("Percent Change by Period Plot", plotlyOutput("percent_change_by_period_plot")),
+            nav_panel("Percent Change by Period Table", DTOutput ("percent_change_by_period_table")),
+            nav_panel("Activity by Period", plotlyOutput("activity_by_period")),
+            nav_panel("Statistical Summary", DTOutput("stats_table")),
             nav_panel("Cleaned Data", DTOutput("cleaned_table"))
           )
         )
@@ -110,14 +111,65 @@ server <- function(input, output, session) {
     }
   )
   
-  output$all_fish_by_minute <- renderPlotly({
-    zebrabox_data() %>%
-    ggplot(aes(x = time_min, y = activity)) +
-      geom_point() +
-      labs(title = "Activity vs Time")
+    output$all_fish_by_minute <- renderPlotly({
+      req(zebrabox_data())
+      data <- zebrabox_data()
+      
+      qc_all_act_max <- data %>%
+        filter(startreason == 'Beginning of period', !is.na(activity)) %>%
+        filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
+        summarize(max_act = max(activity, na.rm = TRUE)) %>%
+        pull(max_act)
+      
+      plot <- data %>%
+        filter(startreason == 'Beginning of period') %>%
+        ggplot(aes(x = time_min, y = activity, color = well, group = well)) +
+        geom_rect(aes(fill = light, xmin = time_min,
+                      xmax = time_min + 1, ymin = 0, ymax = qc_all_act_max + 100),
+                  color = NA) +
+        scale_fill_manual(values = c('gray80', 'white')) +
+        geom_vline(xintercept = seq(0, max(data$time_min), 10),
+                   linetype = 'dashed', color = 'gray60') +
+        geom_point() +
+        geom_line() +
+        scale_x_continuous(breaks = seq(0, max(data$time_min), 10)) +
+        facet_wrap(~ plate, ncol = 1) +
+        coord_cartesian(ylim = c(0, qc_all_act_max + 100)) +
+        labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Individual Fish') +
+        theme_classic(base_size = 16)
     })
+    
   
-  output$condition_summary <- renderPlot({ plot.new() })
+  output$condition_summary <- renderPlotly({ 
+    req(zebrabox_data())
+    data <- zebrabox_data()
+    
+    qc_condition_summary <- data %>%
+      filter(startreason == 'Beginning of period') %>% 
+      group_by(plate, treatment, light, time_min) %>%
+      summarize(mean_activity = mean(activity, na.rm = T)) %>%
+      ungroup() 
+    
+    qc_condition_max <- qc_condition_summary %>%
+      filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
+      filter(mean_activity == max(mean_activity)) %>%
+      select(mean_activity) %>%
+      deframe()
+    
+    ### plot an interactive graph of summarized activity by treatment
+    zebrabox_summarized <- qc_condition_summary %>%
+      ggplot(aes(x = time_min, y = mean_activity, color = treatment, group = treatment)) +
+      geom_rect(aes(fill = light, xmin = time_min,
+                    xmax = time_min + 1, ymin = 0, ymax = qc_condition_max + 100), color = NA) +
+      scale_fill_manual(values = c('gray80', 'white')) +
+      geom_vline(xintercept = seq(0, max(data$time_min), 10), linetype = 'dashed', color = 'gray60') +
+      geom_point() +
+      geom_line() +
+      facet_wrap(~ plate) +
+      coord_cartesian(ylim = c(0, qc_condition_max)) +
+      labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Summarized Conditions') +
+      theme_classic(base_size = 16) 
+    })
   
   output$plate_map <- renderPlotly({ 
     zebrabox_data() %>%
@@ -150,11 +202,114 @@ server <- function(input, output, session) {
         theme_bw()
     })
   
-  output$percent_change <- renderPlot({ plot.new() })
+  output$percent_change_by_period_plot <- renderPlotly({
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity),
+             treatment == control_group) %>%
+      mutate(period3 = ifelse(period2 %in% 1:2, 
+                              'acclimation', as.character(period2)),
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                                  '6', '7', '8', '9', '10'))) %>% 
+      group_by(period3) %>%
+      summarize(unique_name = median(activity)) %>%
+      ungroup() -> median_cycle_activity
+    
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      mutate(period3 = ifelse(period2 %in% 1:2, 
+                              'acclimation', as.character(period2)),
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                                  '6', '7', '8', '9', '10'))) %>%
+      left_join(median_cycle_activity, by = join_by(period3)) %>%
+      mutate(percent_change = ((activity - unique_name) / unique_name) * 100) %>%
+      group_by(period3, treatment, light, well) %>%
+      summarize(mean_activity = mean(percent_change)) %>%
+      ungroup() %>%
+      ggplot(aes(x = period3, y = mean_activity, color = treatment)) +
+      annotate("rect", xmin = 1.5, xmax = 2.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+      annotate("rect", xmin = 3.5, xmax = 4.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+      annotate("rect", xmin = 5.5, xmax = 6.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+      annotate("rect", xmin = 7.5, xmax = 8.5, ymin = -Inf, ymax = Inf, fill = 'gray80') +
+      geom_vline(xintercept = seq(1.5, 8.5, 1), linetype = 'dashed', color = 'gray60') +
+      geom_hline(yintercept = 0, linetype = 'dashed', color = 'gray60') +
+      geom_boxplot(alpha = 0) +
+      geom_point(position = position_dodge(width = .75)) +
+      coord_cartesian(ylim = c(-200, 200)) +
+      labs(x = 'Cycle', 
+           y = 'Percent Change From Control Median Activity',
+           title = 'Percent Change') +
+      theme_bw()
+  })
   
-  output$activity_by_period <- renderPlot({ plot.new() })
   
-  output$percent_change_by_period <- renderPlot({ plot.new() })
+  output$percent_change_by_period_table <- renderDT({
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      mutate(period3 = ifelse(period2 %in% 1:2, 
+                              'acclimation', as.character(period2)),
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                                  '6', '7', '8', '9', '10'))) %>%
+      left_join(median_cycle_activity, by = join_by(period3)) %>%
+      mutate(percent_change = ((activity - unique_name) / unique_name) * 100) %>%
+      group_by(period3, treatment, light, well) %>%
+      summarize(mean_activity = mean(percent_change)) %>%
+      ungroup() %>%
+      rename(period = period3, percent_change = mean_activity) %>%
+      DT::datatable(extensions = 'Buttons',
+                    options = list(dom = 'Blfrtip',
+                                   buttons = c('copy', 'csv', 'excel'),
+                                   lengthMenu = list(c(10, 25, 50, -1),
+                                                     c(10, 25, 50, "All"))))
+  })
+  
+  output$activity_by_period <- renderPlotly({ 
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      mutate(period3 = ifelse(period2 %in% 1:2, 
+                              'acclimation', as.character(period2)),
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                                  '6', '7', '8', '9', '10'))) %>%
+      group_by(period3, treatment, light, well) %>%
+      summarize(mean_activity = mean(activity)) %>%
+      ungroup() %>%
+      ggplot(aes(x = period3, y = mean_activity, color = treatment)) +
+      annotate("rect", xmin = 1.5, xmax = 2.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+      annotate("rect", xmin = 3.5, xmax = 4.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+      annotate("rect", xmin = 5.5, xmax = 6.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+      annotate("rect", xmin = 7.5, xmax = 8.5, ymin = 0, ymax = Inf, fill = 'gray80') +
+      geom_vline(xintercept = seq(1.5, 8.5, 1), linetype = 'dashed', color = 'gray60') +
+      geom_boxplot(alpha = 0) +
+      # ggbeeswarm::geom_quasirandom(position = position_dodge(width = .75)) +
+      geom_point(position = position_dodge(width = .75)) +
+      labs(x = 'Cycle', 
+           y = 'Mean by Dark Cycle',
+           title = 'Unnormalized Activity') +
+      theme_bw()
+    })
+  
+  output$percent_change_plot <- renderPlotly({
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity),
+             strain == control_group, light == 'dark') %>%
+      summarize(median(activity)) %>%
+      deframe() -> median_activity
+    
+    
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      mutate(percent_change = ((activity - median_activity) / median_activity) * 100) %>%
+      group_by(treatment, light, well) %>%
+      summarize(mean_activity = mean(percent_change)) %>%
+      ungroup() %>%
+      filter(light == 'dark') %>%
+      ggplot(aes(x = treatment, y = mean_activity)) +
+      ggbeeswarm::geom_quasirandom() +
+      geom_boxplot(alpha = 0) +
+      labs(x = 'Condition', 
+           y = 'Average Percent Change From Control Median\nin Dark Cycles',
+           title = 'Percent Change Activity') +
+      theme_bw()
+  })
   
   output$stats_table <- DT::renderDataTable({
     data.frame(Message = "Statistics will appear here")
