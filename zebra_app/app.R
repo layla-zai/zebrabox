@@ -85,6 +85,7 @@ server <- function(input, output, session) {
   })
   
   # Reactive expression for main data (zebrabox_data)
+<<<<<<< Updated upstream
     zebrabox_data <- reactive({
       readr::read_tsv("../simulated_zebrabox_data2.tsv") %>% 
         mutate(time_min = start / 60,
@@ -96,6 +97,25 @@ server <- function(input, output, session) {
         separate(aname, into = c('well', 'name'), sep = '_') %>%
         left_join(metadata(), by = join_by(well, plate == box_used))
     })
+=======
+  zebrabox_data <- reactive({
+    raw_data <- readxl::read_excel("C:/Users/layla/OneDrive/Documents/20241002-132933-light-acc-ab1-s1lxlx-2.xls.xlsx")
+    
+    raw_data %>%
+      mutate(
+        time_min = start / 60,
+        period2 = ifelse(nchar(time_min) == 1, 1,
+                         as.integer(str_extract(time_min, '^[0-9]')) + 1),
+        plate = str_extract(location, 'Loc[AB]'),
+        light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light')
+      ) %>%
+      separate(aname, into = c('well', 'name'), sep = '_') %>%
+      left_join(metadata(), by = join_by(well, plate == box_used)) %>%
+      select(plate, treatment, well, time_min, light, period, 
+             datatype, activity = actinteg, everything()) %>%
+      filter(!is.na(treatment), timebinid == 1)
+  })
+>>>>>>> Stashed changes
   
   output$cleaned_table <- renderDT({
     zebrabox_data()
@@ -117,10 +137,21 @@ server <- function(input, output, session) {
       labs(title = "Activity vs Time")
     })
   
+<<<<<<< Updated upstream
   output$condition_summary <- renderPlot({ plot.new() })
   
   output$plate_map <- renderPlotly({ 
     zebrabox_data() %>%
+=======
+  # The rest of the plots can be placeholders for now
+  output$plot2 <- renderPlot({ plot.new() })
+    
+  
+  
+  output$plot3 <- renderPlotly({
+    df <- zebrabox_data() %>%
+    
+>>>>>>> Stashed changes
       separate(well, into = c('well_row', 'well_column'), sep = 1) %>%
       filter(datatype == 'QuantizationSum', period2 == 3) %>%
       ggplot(aes(x = well_column, y = well_row, text = treatment,
