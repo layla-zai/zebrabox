@@ -312,7 +312,39 @@ server <- function(input, output, session) {
   })
   
   output$stats_table <- DT::renderDataTable({
-    data.frame(Message = "Statistics will appear here")
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      mutate(period3 = ifelse(period2 %in% 1:2, 
+                              'acclimation', as.character(period2)),
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                                  '6', '7', '8', '9'))) %>%
+      group_by(period3, treatment, light, well) %>%
+      summarize(mean_activity = mean(activity)) %>%
+      ungroup() %>%
+      filter(light == 'dark') %>%
+      group_by(period3) %>%
+      nest() %>%
+      ungroup() %>%
+      mutate(test = map(data, ~ TukeyHSD(aov(mean_activity ~ treatment, data = .))),
+             class = map(test, ~ class(.))) %>%
+      unnest(c(class)) %>%
+      filter(class != 'try-error') %>%
+      mutate(test = map(test, ~ broom::tidy(.))) %>%
+      unnest(c(test)) %>%
+      select(period = period3, 
+             groups_tested = contrast,
+             difference_means = estimate,
+             conf.low, conf.high, adj.p.value) %>%
+      mutate(difference_means = round(difference_means),
+             conf.low = round(conf.low),
+             conf.high = round(conf.high),
+             adj.p.value = round(adj.p.value, 4)) %>%
+      mutate(significant = ifelse(adj.p.value < 0.05, 'significant', 'not significant')) %>%
+      DT::datatable(extensions = 'Buttons',
+                    options = list(dom = 'Blfrtip',
+                                   buttons = c('copy', 'csv', 'excel'),
+                                   lengthMenu = list(c(10, 25, 50, -1),
+                                                     c(10, 25, 50, "All"))))
   })
   
 }
