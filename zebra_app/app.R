@@ -53,11 +53,16 @@ ui <- page_sidebar(
             nav_panel("Plate Map / Well Activity", plotlyOutput("plate_map")),
             nav_panel("Mean Activity", plotOutput("mean_activity")),
             nav_panel("Percent Change Plot", plotlyOutput("percent_change_plot")),
+            nav_panel("Percent Change Table", DTOutput("percent_change_table")),
             nav_panel("Percent Change by Period Plot", plotlyOutput("percent_change_by_period_plot")),
             nav_panel("Percent Change by Period Table", DTOutput ("percent_change_by_period_table")),
             nav_panel("Activity by Period", plotlyOutput("activity_by_period")),
             nav_panel("Statistical Summary", DTOutput("stats_table")),
-            nav_panel("Cleaned Data", DTOutput("cleaned_table"))
+            nav_panel("Cleaned Data", DTOutput("cleaned_table")),
+            nav_panel("Peak Height Table", DTOutput("peak_height_table")),
+            nav_panel("Peak Height Plot", plotlyOutput("peak_height_plot")),
+            nav_panel("Pre-Peak Activity Slope", plotlyOutput("starting_slope_plot")),
+            nav_panel("Post-Peak Activity Slope", plotlyOutput("ending_slope_plot"))
           )
         )
       )
@@ -311,6 +316,27 @@ server <- function(input, output, session) {
       theme_bw()
   })
   
+  output$percent_change_table <- renderDT({
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity),
+             strain == control_group, light == 'dark') %>%
+      summarize(median(activity)) %>%
+      deframe() -> median_activity
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      mutate(percent_change = ((activity - median_activity) / median_activity) * 100) %>%
+      group_by(treatment, light, well) %>%
+      summarize(mean_activity = mean(percent_change)) %>%
+      ungroup() %>%
+      filter(light == 'dark') %>%
+      rename(mean_percent_change = mean_activity) %>%
+      DT::datatable(extensions = 'Buttons',
+                    options = list(dom = 'Blfrtip',
+                                   buttons = c('copy', 'csv', 'excel'),
+                                   lengthMenu = list(c(10, 25, 50, -1),
+                                                     c(10, 25, 50, "All"))))
+    })
+  
   output$stats_table <- DT::renderDataTable({
     zebrabox_data() %>%
       filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
@@ -347,6 +373,128 @@ server <- function(input, output, session) {
                                                      c(10, 25, 50, "All"))))
   })
   
+  
+  output$peak_height_table <- DT::renderDataTable({
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      group_by(treatment, light, period2, well) %>%
+      mutate(index = row_number()) %>%
+      nest() %>%
+      ungroup() %>%
+      mutate(period_peak = map(data, ~ as_tibble(pracma::findpeaks(.$activity, npeaks = 1)))) %>%
+      unnest(c(period_peak)) %>%
+      rename(peak_height = V1, peak_index = V2, curve_start_index = V3,
+             curve_end_index = V4) %>%
+      unnest(c(data)) %>%
+      mutate(max_peak = ifelse(index == peak_index, 'max', NA_character_)) -> zebrabox_data_w_peaks
+    
+    # test with linear model
+    zebrabox_data_w_peaks %>%
+      filter(max_peak == 'max') %>%
+      distinct(treatment, period2, light, well, peak_height) %>%
+      filter(light == 'dark') %>%
+      group_by(treatment) %>%
+      nest() %>%
+      ungroup() %>%
+      mutate(test = map(data, ~ broom::tidy(lm(peak_height ~ period2, data = .)))) %>%
+      unnest(c(test)) %>%
+      filter(term != '(Intercept)') %>%
+      select(treatment, peak_height_change_over_time = estimate,
+             pvalue = p.value) %>%
+      mutate(peak_height_change_over_time = round(peak_height_change_over_time, 2),
+             pvalue = round(peak_height_change_over_time, 2)) %>%
+      DT::datatable(extensions = 'Buttons',
+                    options = list(dom = 'Blfrtip',
+                                   buttons = c('copy', 'csv', 'excel'),
+                                   lengthMenu = list(c(10, 25, 50, -1),
+                                                     c(10, 25, 50, "All"))),
+                    caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
+                                                      'Zebrabox'))
+  })
+   output$peak_height_plot <- renderPlotly({
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      group_by(treatment, light, period2, well) %>%
+      mutate(index = row_number()) %>%
+      nest() %>%
+      ungroup() %>%
+      mutate(period_peak = map(data, ~ as_tibble(pracma::findpeaks(.$activity, npeaks = 1)))) %>%
+      unnest(c(period_peak)) %>%
+      rename(peak_height = V1, peak_index = V2, curve_start_index = V3,
+             curve_end_index = V4) %>%
+      unnest(c(data)) %>%
+      mutate(max_peak = ifelse(index == peak_index, 'max', NA_character_)) -> zebrabox_data_w_peaks
+    
+    zebrabox_data_w_peaks %>%
+      filter(max_peak == 'max') %>%
+      distinct(treatment, period2, light, well, peak_height) %>%
+      filter(light == 'dark') %>%
+      ggplot(aes(x = period2, y = peak_height, color = treatment, group = well)) +
+      geom_point() +
+      geom_line() +
+      scale_x_continuous(breaks = c(3, 5, 7, 9)) +
+      labs(x = 'Condition',
+           y = 'Max Curve Height Dark Cycles',
+           title = 'Zebrabox') +
+      facet_wrap(~ treatment) +
+      theme_bw()
+  })
+  
+  output$starting_slope_plot <- renderPlotly({
+    
+    zebrabox_data_w_peaks %>% #distinct(period) %>% mutate(period2 = str_remove(period, '^0+:')
+      group_by(treatment, well, light, period2) %>%
+      filter(index <= peak_index) %>% #filter(well == 'c1-004') %>% tail(1) %>% nest() %>% ungroup() %>% mutate(test = map(data, ~ .$activity)) %>% unnest(c(test))
+      nest() %>%
+      ungroup() %>%
+      mutate(len = map(data, ~nrow(.))) %>%
+      unnest(c(len)) %>%
+      mutate(period_start_slope = case_when(len == 1 ~ map(data, ~ .$activity), # maybe return 0 or NA?
+                                            len == 2 ~ map(data, ~ as.numeric(dist(select(.,
+                                                                                          activity, time_min),
+                                                                                   method = 'euclidean'))),
+                                            TRUE ~ map(data, ~ filter(broom::tidy(lm(activity ~ time_min, data = .)),
+                                                                      term == 'time_min')$estimate))) %>%
+      unnest(c(period_start_slope)) %>%
+      distinct(treatment, period2, light, well, period_start_slope) %>%
+      filter(light == 'dark') %>%
+      ggplot(aes(x = period2, y = period_start_slope, color = treatment, group = well)) +
+      geom_point() +
+      geom_line() +
+      scale_x_continuous(breaks = c(3, 5, 7, 9)) +
+      labs(x = 'Condition',
+           y = 'Starting Slope Dark Cycles',
+           title = 'Zebrabox') +
+      facet_wrap(~ treatment) +
+      theme_bw()
+  })
+  output$ending_slope_plot <- renderPlotly({
+    zebrabox_data_w_peaks %>%
+      group_by(treatment, well, light, period2) %>%
+      filter(index >= peak_index) %>% #filter(well == 'c1-004') %>% tail(1) %>% nest() %>% ungroup() %>% mutate(test = map(data, ~ .$activity)) %>% unnest(c(test))
+      nest() %>%
+      ungroup() %>%
+      mutate(len = map(data, ~nrow(.))) %>%
+      unnest(c(len)) %>%
+      mutate(period_start_slope = case_when(len == 1 ~ map(data, ~ .$activity),
+                                            len == 2 ~ map(data, ~ as.numeric(dist(select(.,
+                                                                                          activity, time_min),
+                                                                                   method = 'euclidean'))),
+                                            TRUE ~ map(data, ~ filter(broom::tidy(lm(activity ~ time_min, data = .)),
+                                                                      term == 'time_min')$estimate))) %>%
+      unnest(c(period_start_slope)) %>%
+      distinct(treatment, period2, light, well, period_start_slope) %>%
+      filter(light == 'dark') %>%
+      ggplot(aes(x = period2, y = period_start_slope, color = treatment, group = well)) +
+      geom_point() +
+      geom_line() +
+      scale_x_continuous(breaks = c(3, 5, 7, 9)) +
+      labs(x = 'Condition',
+           y = 'Ending Slope Dark Cycles',
+           title = 'Zebrabox') +
+      facet_wrap(~ treatment) +
+      theme_bw()
+  })
 }
 
 
