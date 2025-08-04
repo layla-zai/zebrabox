@@ -8,6 +8,7 @@
 library(shiny)
 library(bslib)
 library(vroom)
+library(broom)
 library(dplyr)
 library(ggplot2)
 library(stringr)
@@ -82,6 +83,8 @@ ui <- page_sidebar(
 
 server <- function(input, output, session) {
   
+  control_group <- "WT"
+  
   metadata <- reactive({
     readxl::read_excel("../2025-07-10_simulated_metadata.xlsx", skip = 1) %>%
       mutate(box_used = as.character(box_used),
@@ -91,21 +94,21 @@ server <- function(input, output, session) {
   })
   
   # Reactive expression for main data (zebrabox_data)
-    zebrabox_data <- reactive({
-      readr::read_tsv("../simulated_zebrabox_data2.tsv") %>% 
-        mutate(time_min = start / 60,
-              period2 = ifelse(time_min < 10, 1, floor(time_min / 10) + 1),
-              plate = str_extract(location, 'Loc[AB]'),
-              light = ifelse(period2 %% 2 != 0 & period2 != 1,
-                              'dark', 'light')) %>%
-        rename(activity = actinteg) %>%
-        separate(aname, into = c('well', 'name'), sep = '_') %>%
-        left_join(metadata(), by = join_by(well, plate == box_used))
-    })
+  zebrabox_data <- reactive({
+    readr::read_tsv("../simulated_zebrabox_data2.tsv") %>% 
+      mutate(time_min = start / 60,
+             period2 = ifelse(time_min < 10, 1, floor(time_min / 10) + 1),
+             plate = str_extract(location, 'Loc[AB]'),
+             light = ifelse(period2 %% 2 != 0 & period2 != 1,
+                            'dark', 'light')) %>%
+      rename(activity = actinteg) %>%
+      separate(aname, into = c('well', 'name'), sep = '_') %>%
+      left_join(metadata(), by = join_by(well, plate == box_used))
+  })
   
   output$cleaned_table <- renderDT({
     zebrabox_data()
-    })
+  })
   
   output$download_template <- downloadHandler(
     filename = function() { 
@@ -116,34 +119,34 @@ server <- function(input, output, session) {
     }
   )
   
-    output$all_fish_by_minute <- renderPlotly({
-      req(zebrabox_data())
-      data <- zebrabox_data()
-      
-      qc_all_act_max <- data %>%
-        filter(startreason == 'Beginning of period', !is.na(activity)) %>%
-        filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
-        summarize(max_act = max(activity, na.rm = TRUE)) %>%
-        pull(max_act)
-      
-      plot <- data %>%
-        filter(startreason == 'Beginning of period') %>%
-        ggplot(aes(x = time_min, y = activity, color = well, group = well)) +
-        geom_rect(aes(fill = light, xmin = time_min,
-                      xmax = time_min + 1, ymin = 0, ymax = qc_all_act_max + 100),
-                  color = NA) +
-        scale_fill_manual(values = c('gray80', 'white')) +
-        geom_vline(xintercept = seq(0, max(data$time_min), 10),
-                   linetype = 'dashed', color = 'gray60') +
-        geom_point() +
-        geom_line() +
-        scale_x_continuous(breaks = seq(0, max(data$time_min), 10)) +
-        facet_wrap(~ plate, ncol = 1) +
-        coord_cartesian(ylim = c(0, qc_all_act_max + 100)) +
-        labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Individual Fish') +
-        theme_classic(base_size = 16)
-    })
+  output$all_fish_by_minute <- renderPlotly({
+    req(zebrabox_data())
+    data <- zebrabox_data()
     
+    qc_all_act_max <- data %>%
+      filter(startreason == 'Beginning of period', !is.na(activity)) %>%
+      filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
+      summarize(max_act = max(activity, na.rm = TRUE)) %>%
+      pull(max_act)
+    
+    plot <- data %>%
+      filter(startreason == 'Beginning of period') %>%
+      ggplot(aes(x = time_min, y = activity, color = well, group = well)) +
+      geom_rect(aes(fill = light, xmin = time_min,
+                    xmax = time_min + 1, ymin = 0, ymax = qc_all_act_max + 100),
+                color = NA) +
+      scale_fill_manual(values = c('gray80', 'white')) +
+      geom_vline(xintercept = seq(0, max(data$time_min), 10),
+                 linetype = 'dashed', color = 'gray60') +
+      geom_point() +
+      geom_line() +
+      scale_x_continuous(breaks = seq(0, max(data$time_min), 10)) +
+      facet_wrap(~ plate, ncol = 1) +
+      coord_cartesian(ylim = c(0, qc_all_act_max + 100)) +
+      labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Individual Fish') +
+      theme_classic(base_size = 16)
+  })
+  
   
   output$condition_summary <- renderPlotly({ 
     req(zebrabox_data())
@@ -174,7 +177,7 @@ server <- function(input, output, session) {
       coord_cartesian(ylim = c(0, qc_condition_max)) +
       labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Summarized Conditions') +
       theme_classic(base_size = 16) 
-    })
+  })
   
   output$plate_map <- renderPlotly({ 
     zebrabox_data() %>%
@@ -189,7 +192,7 @@ server <- function(input, output, session) {
       facet_wrap(~ plate, ncol = 2) +
       labs(x = NULL, y = NULL, color = 'Activity\n1st Dark\nPeriod') +
       theme_minimal()
-    })
+  })
   
   output$mean_activity <- renderPlot({ 
     zebrabox_data() %>%
@@ -199,13 +202,13 @@ server <- function(input, output, session) {
       ungroup() %>%
       filter(light == 'dark') %>%
       ggplot(aes(x = treatment, y = mean_activity)) +
-        ggbeeswarm::geom_quasirandom() +
-        geom_boxplot(alpha = 0) +
-        labs(x = 'Condition', 
-             y = 'Mean Activity Dark Cycles',
-             title = 'Unnormalized Activity') +
-        theme_bw()
-    })
+      ggbeeswarm::geom_quasirandom() +
+      geom_boxplot(alpha = 0) +
+      labs(x = 'Condition', 
+           y = 'Mean Activity Dark Cycles',
+           title = 'Unnormalized Activity') +
+      theme_bw()
+  })
   
   output$percent_change_by_period_plot <- renderPlotly({
     zebrabox_data() %>%
@@ -249,6 +252,17 @@ server <- function(input, output, session) {
   
   output$percent_change_by_period_table <- renderDT({
     zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity),
+             treatment == control_group) %>%
+      mutate(period3 = ifelse(period2 %in% 1:2, 
+                              'acclimation', as.character(period2)),
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+                                                  '6', '7', '8', '9', '10'))) %>% 
+      group_by(period3) %>%
+      summarize(unique_name = median(activity)) %>%
+      ungroup() -> median_cycle_activity
+    
+    zebrabox_data() %>%
       filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
       mutate(period3 = ifelse(period2 %in% 1:2, 
                               'acclimation', as.character(period2)),
@@ -290,7 +304,7 @@ server <- function(input, output, session) {
            y = 'Mean by Dark Cycle',
            title = 'Unnormalized Activity') +
       theme_bw()
-    })
+  })
   
   output$percent_change_plot <- renderPlotly({
     zebrabox_data() %>%
@@ -335,7 +349,7 @@ server <- function(input, output, session) {
                                    buttons = c('copy', 'csv', 'excel'),
                                    lengthMenu = list(c(10, 25, 50, -1),
                                                      c(10, 25, 50, "All"))))
-    })
+  })
   
   output$stats_table <- DT::renderDataTable({
     zebrabox_data() %>%
@@ -411,7 +425,7 @@ server <- function(input, output, session) {
                     caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
                                                       'Zebrabox'))
   })
-   output$peak_height_plot <- renderPlotly({
+  output$peak_height_plot <- renderPlotly({
     zebrabox_data() %>%
       filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
       group_by(treatment, light, period2, well) %>%
@@ -442,6 +456,19 @@ server <- function(input, output, session) {
   
   output$starting_slope_plot <- renderPlotly({
     
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      group_by(treatment, light, period2, well) %>%
+      mutate(index = row_number()) %>%
+      nest() %>%
+      ungroup() %>%
+      mutate(period_peak = map(data, ~ as_tibble(pracma::findpeaks(.$activity, npeaks = 1)))) %>%
+      unnest(c(period_peak)) %>%
+      rename(peak_height = V1, peak_index = V2, curve_start_index = V3,
+             curve_end_index = V4) %>%
+      unnest(c(data)) %>%
+      mutate(max_peak = ifelse(index == peak_index, 'max', NA_character_)) -> zebrabox_data_w_peaks
+    
     zebrabox_data_w_peaks %>% #distinct(period) %>% mutate(period2 = str_remove(period, '^0+:')
       group_by(treatment, well, light, period2) %>%
       filter(index <= peak_index) %>% #filter(well == 'c1-004') %>% tail(1) %>% nest() %>% ungroup() %>% mutate(test = map(data, ~ .$activity)) %>% unnest(c(test))
@@ -469,6 +496,20 @@ server <- function(input, output, session) {
       theme_bw()
   })
   output$ending_slope_plot <- renderPlotly({
+    
+    zebrabox_data() %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      group_by(treatment, light, period2, well) %>%
+      mutate(index = row_number()) %>%
+      nest() %>%
+      ungroup() %>%
+      mutate(period_peak = map(data, ~ as_tibble(pracma::findpeaks(.$activity, npeaks = 1)))) %>%
+      unnest(c(period_peak)) %>%
+      rename(peak_height = V1, peak_index = V2, curve_start_index = V3,
+             curve_end_index = V4) %>%
+      unnest(c(data)) %>%
+      mutate(max_peak = ifelse(index == peak_index, 'max', NA_character_)) -> zebrabox_data_w_peaks
+    
     zebrabox_data_w_peaks %>%
       group_by(treatment, well, light, period2) %>%
       filter(index >= peak_index) %>% #filter(well == 'c1-004') %>% tail(1) %>% nest() %>% ungroup() %>% mutate(test = map(data, ~ .$activity)) %>% unnest(c(test))
@@ -499,6 +540,7 @@ server <- function(input, output, session) {
 
 
 shinyApp(ui, server)
+
 
 
 
