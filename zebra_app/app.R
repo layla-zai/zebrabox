@@ -28,10 +28,18 @@ ui <- page_sidebar(
     fileInput("metadata_file", "Upload Metadata:"),
     downloadButton("download_template", "Download metadata template", class = "btn btn-secondary btn-md"),
     textInput("metadata_order", "(optional) Specify metadata order:"),
-    actionButton("run", "Run", class = "btn btn-primary btn-lg")
+    actionButton("run", "Run", class = "btn btn-primary btn-lg"),
+    
+    conditionalPanel(
+      condition = "input.run > 0",
+      br(),
+      downloadButton("download_report", "Download Report", class = "btn btn-secondary btn-md")
+    )
   ),
   
-  card(
+  div(
+    style = "width: 100%; padding: 15px;",
+    
     conditionalPanel(
       condition = "input.run == 0",
       tags$h5("Please upload your data and click Run to begin.")
@@ -39,34 +47,23 @@ ui <- page_sidebar(
     
     conditionalPanel(
       condition = "input.run > 0",
-      fluidRow(
-        column(
-          width = 3,
-          card(
-            downloadButton("download_report", "Download Report", class = "btn-sm mb-2"),
-            downloadButton("download_data", "Download Data", class = "btn-sm")
-          )
-        ),
-        column(
-          width = 9,
-          navset_card_underline(
-            nav_panel("All Fish by Minute", plotlyOutput("all_fish_by_minute")),
-            nav_panel("Condition Summary", plotlyOutput("condition_summary")),
-            nav_panel("Plate Map / Well Activity", plotlyOutput("plate_map")),
-            nav_panel("Mean Activity", plotOutput("mean_activity")),
-            nav_panel("Percent Change Plot", plotlyOutput("percent_change_plot")),
-            nav_panel("Percent Change Table", DTOutput("percent_change_table")),
-            nav_panel("Percent Change by Period Plot", plotlyOutput("percent_change_by_period_plot")),
-            nav_panel("Percent Change by Period Table", DTOutput ("percent_change_by_period_table")),
-            nav_panel("Activity by Period", plotlyOutput("activity_by_period")),
-            nav_panel("Statistical Summary", DTOutput("stats_table")),
-            nav_panel("Cleaned Data", DTOutput("cleaned_table")),
-            nav_panel("Peak Height Table", DTOutput("peak_height_table")),
-            nav_panel("Peak Height Plot", plotlyOutput("peak_height_plot")),
-            nav_panel("Pre-Peak Activity Slope", plotlyOutput("starting_slope_plot")),
-            nav_panel("Post-Peak Activity Slope", plotlyOutput("ending_slope_plot"))
-          )
-        )
+      width = 9,
+      navset_card_underline(
+        nav_panel("All Fish by Minute", plotlyOutput("all_fish_by_minute")),
+        nav_panel("Condition Summary", plotlyOutput("condition_summary")),
+        nav_panel("Plate Map / Well Activity", plotlyOutput("plate_map")),
+        nav_panel("Mean Activity", plotOutput("mean_activity")),
+        nav_panel("Percent Change Plot", plotlyOutput("percent_change_plot")),
+        nav_panel("Percent Change Table", DTOutput("percent_change_table")),
+        nav_panel("Percent Change by Period Plot", plotlyOutput("percent_change_by_period_plot")),
+        nav_panel("Percent Change by Period Table", DTOutput ("percent_change_by_period_table")),
+        nav_panel("Activity by Period", plotlyOutput("activity_by_period")),
+        nav_panel("Statistical Summary", DTOutput("stats_table")),
+        nav_panel("Cleaned Data", DTOutput("cleaned_table")),
+        nav_panel("Peak Height Table", DTOutput("peak_height_table")),
+        nav_panel("Peak Height Plot", plotlyOutput("peak_height_plot")),
+        nav_panel("Pre-Peak Activity Slope", plotlyOutput("starting_slope_plot")),
+        nav_panel("Post-Peak Activity Slope", plotlyOutput("ending_slope_plot"))
       )
     )
   ),
