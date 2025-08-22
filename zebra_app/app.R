@@ -24,8 +24,12 @@ options(shiny.maxRequestSize = 30*1024^2)
 ui <- page_sidebar(
   title = "ZebraBox Activity Analysis",
   sidebar = sidebar(
-    fileInput("data_file", "Upload Data:"),
-    fileInput("metadata_file", "Upload Metadata:"),
+    fileInput("data_file", "Upload Data (.xls only):",
+      accept = c(".xls")),
+  
+    fileInput("metadata_file", "Upload Metadata (.xlsx only):",
+      accept = c(".xlsx")),
+
     downloadButton("download_template", "Download metadata template", class = "btn btn-secondary btn-md"),
     textInput("metadata_order", "(optional) Specify metadata order:"),
     actionButton("run", "Run", class = "btn btn-primary btn-lg"),
@@ -42,7 +46,7 @@ ui <- page_sidebar(
     
     conditionalPanel(
       condition = "input.run == 0",
-      tags$h5("Please upload your data and click Run to begin.")
+      tags$h5("Upload your Zebrabox data file (CSV or Excel) using the file upload button, then click Run to process and view your analysis results. Use the download buttons to save any generated tables or plots.")
     ),
     
     conditionalPanel(
@@ -84,7 +88,8 @@ server <- function(input, output, session) {
   control_group <- "WT"
   
   metadata <- reactive({
-    readxl::read_excel("../2025-07-10_simulated_metadata.xlsx", skip = 1) %>%
+    req(input$metadata_file)
+    readxl::read_excel(input$metadata_file$datapath, skip = 1) %>%
       mutate(box_used = as.character(box_used),
              box_used = case_when(box_used == '1' ~ 'LocA',
                                   box_used == '2' ~ 'LocB',
@@ -93,15 +98,22 @@ server <- function(input, output, session) {
   
   # Reactive expression for main data (zebrabox_data)
   zebrabox_data <- reactive({
-    readr::read_tsv("../simulated_zebrabox_data2.tsv") %>% 
-      mutate(time_min = start / 60,
-             period2 = ifelse(time_min < 10, 1, floor(time_min / 10) + 1),
+    req(input$data_file)
+    # readr::read_tsv(input$data_file$datapath) %>%
+    raw_data <- read.delim(input$data_file$datapath, 
+      fileEncoding = "UTF-16LE", stringsAsFactors = F) %>%
+      
+    mutate(time_min = start / 60,
+    experiment_time_of_day = '',
+             period2 = ifelse(nchar(time_min) == 1, 1,
+                              as.integer(str_extract(time_min, '^[0-9]')) + 1),
              plate = str_extract(location, 'Loc[AB]'),
-             light = ifelse(period2 %% 2 != 0 & period2 != 1,
-                            'dark', 'light')) %>%
-      rename(activity = actinteg) %>%
+             light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light')) %>%
       separate(aname, into = c('well', 'name'), sep = '_') %>%
-      left_join(metadata(), by = join_by(well, plate == box_used))
+      left_join(metadata(), by = join_by(well, plate == box_used)) %>%
+      select(plate, treatment, well, time_min, light, period,)
+      #        datatype, activity = actinteg, everything()) %>%
+      # filter(!is.na(treatment), timebinid == 1)
   })
   
   output$cleaned_table <- renderDT({
