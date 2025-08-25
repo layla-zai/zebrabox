@@ -5,6 +5,7 @@
 #
 # ZEBRA APP
 
+
 library(shiny)
 library(bslib)
 library(vroom)
@@ -25,11 +26,11 @@ ui <- page_sidebar(
   title = "ZebraBox Activity Analysis",
   sidebar = sidebar(
     fileInput("data_file", "Upload Data (.xls only):",
-      accept = c(".xls")),
-  
+              accept = c(".xls")),
+    
     fileInput("metadata_file", "Upload Metadata (.xlsx only):",
-      accept = c(".xlsx")),
-
+              accept = c(".xlsx")),
+    
     downloadButton("download_template", "Download metadata template", class = "btn btn-secondary btn-md"),
     textInput("metadata_order", "(optional) Specify metadata order:"),
     actionButton("run", "Run", class = "btn btn-primary btn-lg"),
@@ -100,20 +101,19 @@ server <- function(input, output, session) {
   zebrabox_data <- reactive({
     req(input$data_file)
     # readr::read_tsv(input$data_file$datapath) %>%
-    raw_data <- read.delim(input$data_file$datapath, 
-      fileEncoding = "UTF-16LE", stringsAsFactors = F) %>%
-      
-    mutate(time_min = start / 60,
-    experiment_time_of_day = '',
+    read.delim(input$data_file$datapath, 
+               fileEncoding = "UTF-16LE", stringsAsFactors = F) %>%
+      mutate(time_min = start / 60,
+             experiment_time_of_day = '',
              period2 = ifelse(nchar(time_min) == 1, 1,
                               as.integer(str_extract(time_min, '^[0-9]')) + 1),
              plate = str_extract(location, 'Loc[AB]'),
              light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light')) %>%
       separate(aname, into = c('well', 'name'), sep = '_') %>%
       left_join(metadata(), by = join_by(well, plate == box_used)) %>%
-      select(plate, treatment, well, time_min, light, period,)
-      #        datatype, activity = actinteg, everything()) %>%
-      # filter(!is.na(treatment), timebinid == 1)
+      select(plate, treatment, well, time_min, light, period,
+             datatype, activity = actinteg, everything()) %>%
+      filter(!is.na(treatment), timebinid == 1)
   })
   
   output$cleaned_table <- renderDT({
@@ -222,8 +222,8 @@ server <- function(input, output, session) {
   
   output$percent_change_by_period_plot <- renderPlotly({
     zebrabox_data() %>%
-      filter(datatype == 'QuantizationSum', !is.na(activity),
-             treatment == control_group) %>%
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      # treatment == control_group) %>%
       mutate(period3 = ifelse(period2 %in% 1:2, 
                               'acclimation', as.character(period2)),
              period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
@@ -262,21 +262,21 @@ server <- function(input, output, session) {
   
   output$percent_change_by_period_table <- renderDT({
     zebrabox_data() %>%
-      filter(datatype == 'QuantizationSum', !is.na(activity),
-             treatment == control_group) %>%
-      mutate(period3 = ifelse(period2 %in% 1:2, 
+      filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      # treatment == control_group) #%>%
+      mutate(period3 = ifelse(period2 %in% 1:2,
                               'acclimation', as.character(period2)),
-             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
-                                                  '6', '7', '8', '9', '10'))) %>% 
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5',
+                                                  '6', '7', '8', '9', '10'))) %>%
       group_by(period3) %>%
       summarize(unique_name = median(activity)) %>%
       ungroup() -> median_cycle_activity
     
     zebrabox_data() %>%
       filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
-      mutate(period3 = ifelse(period2 %in% 1:2, 
+      mutate(period3 = ifelse(period2 %in% 1:2,
                               'acclimation', as.character(period2)),
-             period3 = factor(period3, levels = c('acclimation', '3', '4', '5', 
+             period3 = factor(period3, levels = c('acclimation', '3', '4', '5',
                                                   '6', '7', '8', '9', '10'))) %>%
       left_join(median_cycle_activity, by = join_by(period3)) %>%
       mutate(percent_change = ((activity - unique_name) / unique_name) * 100) %>%
@@ -546,10 +546,33 @@ server <- function(input, output, session) {
       facet_wrap(~ treatment) +
       theme_bw()
   })
+  
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste0("ZebraBox_Report_", Sys.Date(), ".html")
+    },
+    content = function(file) {
+      tempReport <- file.path(tempdir(), "report.Rmd")
+      file.copy("report.Rmd", tempReport, overwrite = TRUE)
+      
+      params <- list(
+        metadata_file = input$metadata_file$datapath,
+        data_file     = input$data_file$datapath
+      )
+      
+      rmarkdown::render(
+        tempReport,
+        output_file = file,
+        params = params,
+        envir = new.env(parent = globalenv())
+      )
+    }
+  )
 }
 
 
 shinyApp(ui, server)
+
 
 
 
