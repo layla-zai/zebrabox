@@ -319,13 +319,16 @@ server <- function(input, output, session) {
   output$percent_change_plot <- renderPlotly({
     zebrabox_data() %>%
       filter(datatype == 'QuantizationSum', !is.na(activity),
-             strain == control_group, light == 'dark') %>%
-      summarize(median(activity)) %>%
-      deframe() -> median_activity
+             # strain == control_group,
+             light == 'dark') %>%
+      group_by(plate) %>%
+      summarize(median_activity = median(activity)) %>%
+      ungroup() -> median_activity
     
     
     zebrabox_data() %>%
       filter(datatype == 'QuantizationSum', !is.na(activity)) %>%
+      left_join(median_activity, by = join_by(plate)) %>%
       mutate(percent_change = ((activity - median_activity) / median_activity) * 100) %>%
       group_by(treatment, light, well) %>%
       summarize(mean_activity = mean(percent_change)) %>%
@@ -334,7 +337,7 @@ server <- function(input, output, session) {
       ggplot(aes(x = treatment, y = mean_activity)) +
       ggbeeswarm::geom_quasirandom() +
       geom_boxplot(alpha = 0) +
-      labs(x = 'Condition', 
+      labs(x = 'Condition',
            y = 'Average Percent Change From Control Median\nin Dark Cycles',
            title = 'Percent Change Activity') +
       theme_bw()
