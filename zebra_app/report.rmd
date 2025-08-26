@@ -1,0 +1,94 @@
+---
+title: "ZebraBox Analysis Report"
+output: html_document
+params:
+  metadata_file: NULL
+  data_file: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library(bslib)
+library(vroom)
+library(broom)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+library(writexl)
+library(DT)
+library(plotly)
+library(tidyr)
+library(purrr)
+library(tibble)
+library(ggbeeswarm)
+
+```
+
+## Including Plots
+
+```{r pressure, echo=FALSE}
+
+metadata <- readxl::read_excel(params$metadata_file, skip = 1) %>%
+  mutate(box_used = as.character(box_used),
+         box_used = case_when(box_used == '1' ~ 'LocA',
+                              box_used == '2' ~ 'LocB',
+                              TRUE ~ NA_character_))
+
+zebrabox_data <- read.delim(params$data_file, fileEncoding = "UTF-16LE", stringsAsFactors = FALSE) %>%
+  mutate(time_min = start / 60,
+         experiment_time_of_day = '',
+         period2 = ifelse(nchar(time_min) == 1, 1,
+                          as.integer(str_extract(time_min, '^[0-9]')) + 1),
+         plate = str_extract(location, 'Loc[AB]'),
+         light = ifelse(period2 %% 2 != 0 & period2 != 1, 'dark', 'light')) %>%
+  separate(aname, into = c('well', 'name'), sep = '_') %>%
+  left_join(metadata, by = join_by(well, plate == box_used)) %>%
+  select(plate, treatment, well, time_min, light, period,
+         datatype, activity = actinteg, everything()) %>%
+  filter(!is.na(treatment), timebinid == 1)
+
+ 
+```
+
+```{r, fig.width = 16}
+
+zebrabox_data %>%
+DT::datatable(extensions = 'Buttons',
+               options = list(dom = 'Blfrtip',
+                              buttons = c('copy', 'csv', 'excel'),
+                              lengthMenu = list(c(10, 25, 50, -1),
+                                                c(10, 25, 50, "All"))),
+               caption = htmltools::tags$caption(style = 'caption-side: top; text-align: left; color:black;  font-size:200% ;',
+                                                   'Zebrabox'))
+
+```
+
+```{r, fig.width = 16}
+zebrabox_data %>% 
+  filter(startreason == 'Beginning of period', !is.na(activity)) %>%
+  filter(ifelse(str_detect(plate, 'LocB'), plate == 'LocB', plate == 'LocA')) %>%
+  filter(activity == max(activity)) %>%
+  select(activity) %>%
+  deframe() -> qc_all_act_max
+
+# zebrabox all fish
+zebrabox_data %>% 
+  filter(startreason == 'Beginning of period') %>%
+ggplot(aes(x = time_min, y = activity, color = well, group = well)) +
+  geom_rect(aes(fill = light, xmin = time_min,
+                 xmax = time_min + 1, ymin = 0, ymax = qc_all_act_max + 100), 
+            color = NA) +
+  scale_fill_manual(values = c('gray80', 'white')) +
+  geom_vline(xintercept = seq(0, max(zebrabox_data$time_min), 10), linetype = 'dashed', color = 'gray60') +
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = seq(0, max(zebrabox_data$time_min), 10)) +
+  facet_wrap(~ plate, ncol = 1) + 
+  coord_cartesian(ylim = c(0, qc_all_act_max)) +
+  labs(x = 'Time (min)', y = 'Activity', title = 'Zebrabox Individual Fish') +
+  theme_classic(base_size = 16) -> zebrabox_individual
+ggplotly(zebrabox_individual)
+```
+
+
+
